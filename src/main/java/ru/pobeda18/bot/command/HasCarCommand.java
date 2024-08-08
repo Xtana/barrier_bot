@@ -1,17 +1,22 @@
 package ru.pobeda18.bot.command;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.extensions.bots.commandbot.commands.IBotCommand;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.bots.AbsSender;
-import ru.pobeda18.bot.BarrierBot;
-import ru.pobeda18.bot.states.UserState;
+import ru.pobeda18.service.ClientService;
+import ru.pobeda18.db.tables.ClientState;
+import ru.pobeda18.db.tables.states.UserState;
 
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class HasCarCommand implements IBotCommand {
+
+    private final ClientService clientService;
 
     @Override
     public String getCommandIdentifier() {
@@ -38,7 +43,14 @@ public class HasCarCommand implements IBotCommand {
     }
 
     private void setUserState(long chatId) {
-        BarrierBot.getUserStates().put(chatId, UserState.HAS_CAR_COMMAND);
+//        BarrierBot.getUserStates().put(chatId, UserState.HAS_CAR_COMMAND);
+        if (clientService.findStateByClientTgId(chatId) != null) {
+            return;
+        }
+        ClientState clientState = new ClientState();
+        clientState.setUserState(UserState.HAS_CAR_COMMAND);
+        clientState.setClientTgId(chatId);
+        clientService.saveClientState(clientState);
     }
 
 }

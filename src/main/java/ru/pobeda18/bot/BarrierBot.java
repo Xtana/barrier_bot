@@ -11,7 +11,8 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.pobeda18.bot.funcs.num_processing.CarNumberProcessing;
 import ru.pobeda18.bot.keyBoard.InlineKB;
-import ru.pobeda18.bot.states.UserState;
+import ru.pobeda18.db.tables.TempCarNumber;
+import ru.pobeda18.service.ClientService;
 import ru.pobeda18.client.UserSheetData;
 import ru.pobeda18.service.SheetsService;
 
@@ -28,10 +29,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class BarrierBot extends TelegramLongPollingCommandBot {
 
     private final String botUsername;
-    private final static Map<Long, UserState> userStates = new ConcurrentHashMap<>();
+
     private final CarNumberProcessing carNumberProcessing = new CarNumberProcessing();
     private final SheetsService sheetsService;
-    private final static Map<Long, String> tempCarNumbers = new ConcurrentHashMap<>();
+
+    private final ClientService clientService;
 
     private static final String NEW_LINE = System.lineSeparator();
     private static final String CAR_IN_BASE_PATTERN = "Машина c номером {0} есть в базе.";
@@ -45,10 +47,12 @@ public class BarrierBot extends TelegramLongPollingCommandBot {
             @Value("${telegram.bot.token}") String botToken,
             @Value("${telegram.bot.username}") String botUsername,
             List<IBotCommand> commandList,
-            SheetsService sheetsService) {
+            SheetsService sheetsService,
+            ClientService clientService) {
         super(botToken);
         this.botUsername = botUsername;
         this.sheetsService = sheetsService;
+        this.clientService = clientService;
 
         commandList.forEach(this::register);
     }
@@ -90,7 +94,7 @@ public class BarrierBot extends TelegramLongPollingCommandBot {
     }
 
     private void removeUserStates(long chatId) {
-        userStates.remove(chatId);
+        clientService.deleteClientState(chatId);
     }
 
     private void yesButtonProcessing(long chatId, int messageId) throws GeneralSecurityException, IOException, TelegramApiException {
@@ -101,20 +105,23 @@ public class BarrierBot extends TelegramLongPollingCommandBot {
 
     private UserSheetData getUserSheetData(long chatId) throws GeneralSecurityException, IOException {
         try {
-            return sheetsService.getInfoByNumber(tempCarNumbers.get(chatId));
+
+            UserSheetData userSheetData = sheetsService.getInfoByNumber(clientService.findTempCarNumberByClientTgId(chatId).getTempCarNumber());
+            clientService.deleteTempCarNumber(chatId);
+
+            return userSheetData;
         } catch (GeneralSecurityException | IOException e) {
             throw e;
         }
     }
 
     private String buildInfoTextMess(UserSheetData userData) {
-        StringBuilder textMassage = new StringBuilder();
 
-        textMassage.append(String.format("Информация о владельце машины с номером %s:", userData.getNumber())).append(NEW_LINE)
-                .append(String.format("Номер телефона: %s", userData.getPhoneNumber())).append(NEW_LINE)
-                .append(String.format("Номер квартиры: %s", userData.getApartmentNumber())).append(NEW_LINE).append(NEW_LINE)
-                .append(HAS_CAR_INFO);
-        return textMassage.toString();
+        String textMassage = String.format("Информация о владельце машины с номером %s:", userData.getNumber()) + NEW_LINE +
+                             String.format("Номер телефона: %s", userData.getPhoneNumber()) + NEW_LINE +
+                             String.format("Номер квартиры: %s", userData.getApartmentNumber()) + NEW_LINE + NEW_LINE +
+                             HAS_CAR_INFO;
+        return textMassage;
     }
 
     private void sendChangedMessage(long chatId, int messageId, String textMessage) throws TelegramApiException {
@@ -131,7 +138,10 @@ public class BarrierBot extends TelegramLongPollingCommandBot {
     }
 
     private void noButtonProcessing(long chatId, int messageId) throws TelegramApiException {
-        String textMessage = MessageFormat.format(CAR_IN_BASE_PATTERN, tempCarNumbers.get(chatId)) + NEW_LINE + NEW_LINE + HAS_CAR_INFO;
+
+        String textMessage = MessageFormat.format(CAR_IN_BASE_PATTERN, clientService.findTempCarNumberByClientTgId(chatId).getTempCarNumber()) + NEW_LINE + NEW_LINE + HAS_CAR_INFO;
+        clientService.deleteTempCarNumber(chatId);
+
         sendChangedMessage(chatId, messageId, textMessage);
     }
 
@@ -139,8 +149,8 @@ public class BarrierBot extends TelegramLongPollingCommandBot {
         long chatId = update.getMessage().getChatId();
         String messageText = update.getMessage().getText();
 
-        if (userStates.containsKey(chatId)) {
-            String userState = userStates.get(chatId).toString();
+        if (clientService.findStateByClientTgId(chatId) != null) {
+            String userState = clientService.findStateByClientTgId(chatId).getUserState().toString();
 
             switch (userState) {
                 case "HAS_CAR_COMMAND" -> userCarNumberMessageProcessing(chatId, messageText);
@@ -161,7 +171,12 @@ public class BarrierBot extends TelegramLongPollingCommandBot {
     }
 
     private void isCarInBaseProcessing(long chatId, String carNumber) throws GeneralSecurityException, IOException, TelegramApiException {
-        tempCarNumbers.put(chatId, carNumber);
+
+        TempCarNumber tempCarNumber =  new TempCarNumber();
+        tempCarNumber.setTempCarNumber(carNumber);
+        tempCarNumber.setClientTgId(chatId);
+        clientService.saveTempCarNumber(tempCarNumber);
+
 
         if (sheetsService.isContainNumber(carNumber)) {
             sendMessage(chatId,
@@ -197,9 +212,5 @@ public class BarrierBot extends TelegramLongPollingCommandBot {
             log.error("Send message exception");
             throw e;
         }
-    }
-
-    public static Map<Long, UserState> getUserStates() {
-        return userStates;
     }
 }
